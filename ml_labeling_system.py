@@ -1,12 +1,19 @@
 """
+Sistema de Rotulação Semi-Supervisionada de Dados Orçamentários
+
 Este sistema implementa:
-1. Análise exploratória inicial
-2. Pré-processamento de texto
-3. Vetorização com TF-IDF
-4. Clustering com DBSCAN (vigilância ρ ≥ 0.9)
-5. Rotulação inicial baseada em padrões
-6. Aprendizado semi-supervisionado iterativo
-7. Visualização e análise de resultados
+1. Pré-processamento de texto das descrições orçamentárias
+2. Vetorização com TF-IDF (apenas características textuais)
+3. Clustering com DBSCAN (vigilância ρ ≥ 0.9) para agrupar itens similares
+4. Exportação dos clusters para rotulação manual
+5. Aprendizado semi-supervisionado iterativo (após rotulação manual)
+6. Visualização e análise de resultados
+
+Fluxo de trabalho:
+- Etapa 1: Gerar clusters de alta similaridade
+- Etapa 2: Usuário rotula manualmente alguns exemplos de cada cluster
+- Etapa 3: Algoritmo propaga os rótulos para dados não rotulados
+- Etapa 4: Treinar classificador com base rotulada
 """
 
 import pandas as pd
@@ -15,7 +22,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import re
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import DBSCAN
 from sklearn.semi_supervised import LabelPropagation, LabelSpreading
@@ -30,9 +36,9 @@ warnings.filterwarnings('ignore')
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("husl")
 
-class SemiSupervisedHealthDataLabeler:
+class SemiSupervisedBudgetLabeler:
     """
-    Classe principal para rotulação semi-supervisionada de dados de saúde
+    Classe principal para rotulação semi-supervisionada de dados orçamentários
     """
     
     def __init__(self, vigilance=0.9):
@@ -48,7 +54,6 @@ class SemiSupervisedHealthDataLabeler:
         self.labels = None
         self.confidence_scores = None
         self.vectorizer = None
-        self.scaler = StandardScaler()
         self.label_mapping = {}
         self.iteration_history = []
         
@@ -118,147 +123,57 @@ class SemiSupervisedHealthDataLabeler:
         )
         
         tfidf_matrix = self.vectorizer.fit_transform(self.df['text_processed'])
-        
-        # Adiciona características numéricas normalizadas
-        numeric_features = []
-        numeric_cols = ['Valor Empenhado (EOF)', 'Valor Saldo do Empenho(EOF)', 
-                       'Valor Liquidação Empenho(EOF)', 'Valor Saldo Pago(EOF)']
-        
-        for col in numeric_cols:
-            if col in self.df.columns:
-                values = self.df[col].fillna(0).values.reshape(-1, 1)
-                values_scaled = self.scaler.fit_transform(values)
-                numeric_features.append(values_scaled)
-        
-        if numeric_features:
-            numeric_matrix = np.hstack(numeric_features)
-            # Combina características textuais e numéricas
-            self.features_matrix = np.hstack([tfidf_matrix.toarray(), numeric_matrix])
-        else:
-            self.features_matrix = tfidf_matrix.toarray()
-        
+
+        # Usa apenas características textuais (TF-IDF)
+        self.features_matrix = tfidf_matrix.toarray()
+
         print(f"✓ Matriz de características criada: {self.features_matrix.shape}")
-        return self
-    
-    def identify_initial_patterns(self):
-        """
-        Identifica padrões conhecidos para rotulação inicial
-        """
-        print("\n🏷️ Identificando padrões conhecidos...")
-        
-        # Dicionário de padrões para identificação automática
-        patterns = {
-            'HOSPITAL_DA_MULHER': [
-                r'HOSPITAL\s+DA\s+MULHER',
-                r'HOSP\s+MULHER',
-                r'MATERNIDADE'
-            ],
-            'HOSPITAL_CRIANCA': [
-                r'HOSPITAL\s+DA\s+CRIANCA',
-                r'HOSP\s+INFANTIL',
-                r'PEDIATR'
-            ],
-            'UPA': [
-                r'UPA\s+\d+',
-                r'UNIDADE\s+DE\s+PRONTO\s+ATENDIMENTO',
-                r'PRONTO\s+ATENDIMENTO'
-            ],
-            'HEELJ': [
-                r'HEELJ',
-                r'HOSPITAL\s+ESTADUAL\s+DE\s+LUZIANIA'
-            ],
-            'HUGO': [
-                r'HUGO',
-                r'HOSPITAL\s+DE\s+URGENCIAS\s+DE\s+GOIANIA'
-            ],
-            'ESCOLA_SAUDE': [
-                r'ESCOLA\s+DE\s+SAUDE',
-                r'SESG',
-                r'FORMACAO\s+DE\s+RECURSOS\s+HUMANOS'
-            ],
-            'MEDICAMENTOS': [
-                r'MEDICAMENTO',
-                r'FARMACEUTIC',
-                r'FARMACIA',
-                r'REMEDIO'
-            ],
-            'VIGILANCIA_SANITARIA': [
-                r'VIGILANCIA\s+SANITARIA',
-                r'VISA',
-                r'SANITARIA'
-            ],
-            'AMBULANCIA': [
-                r'AMBULANCIA',
-                r'SAMU',
-                r'TRANSPORTE\s+DE\s+PACIENTE'
-            ],
-            'COVID': [
-                r'COVID',
-                r'CORONAVIRUS',
-                r'PANDEMIA'
-            ]
-        }
-        
-        # Inicializa labels com -1 (não rotulado)
-        self.labels = np.full(len(self.df), -1)
-        self.confidence_scores = np.zeros(len(self.df))
-        
-        # Aplica padrões
-        count_labeled = 0
-        for label_id, (label_name, patterns_list) in enumerate(patterns.items()):
-            for pattern in patterns_list:
-                mask = self.df['text_processed'].str.contains(pattern, regex=True, na=False)
-                newly_labeled = mask & (self.labels == -1)
-                self.labels[newly_labeled] = label_id
-                self.confidence_scores[newly_labeled] = 1.0  # Alta confiança para padrões diretos
-                count_labeled += newly_labeled.sum()
-                
-                if newly_labeled.sum() > 0:
-                    print(f"  • {label_name}: {newly_labeled.sum()} registros identificados")
-            
-            self.label_mapping[label_id] = label_name
-        
-        print(f"✓ Total de registros rotulados inicialmente: {count_labeled}")
+        print(f"  • Características baseadas apenas em texto (TF-IDF)")
         return self
     
     def cluster_dbscan(self):
         """
-        Aplica DBSCAN para clustering com vigilância definida
+        Aplica DBSCAN para clustering com alta similaridade.
+        Gera clusters para rotulação manual posterior.
         """
         print(f"\n🎯 Aplicando DBSCAN com vigilância ρ ≥ {self.vigilance}...")
-        
+
+        # Inicializa labels com -1 (não rotulado)
+        self.labels = np.full(len(self.df), -1)
+        self.confidence_scores = np.zeros(len(self.df))
+
         # Calcula distância epsilon baseada na vigilância
         # Vigilância de 0.9 significa similaridade mínima de 90%
         # Distância = 1 - similaridade
         eps = 1 - self.vigilance
-        
+
         # DBSCAN clustering
         dbscan = DBSCAN(
             eps=eps,
-            min_samples=3,  # Mínimo de 3 pontos para formar um cluster
+            min_samples=2,  # Mínimo de 2 pontos para formar um cluster (mais granular)
             metric='cosine',  # Métrica de cosseno para dados textuais
             n_jobs=-1
         )
-        
+
         cluster_labels = dbscan.fit_predict(self.features_matrix)
-        
+
         # Estatísticas do clustering
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
         n_noise = list(cluster_labels).count(-1)
-        
+
         print(f"  • Clusters encontrados: {n_clusters}")
-        print(f"  • Pontos de ruído: {n_noise}")
-        
-        # Atualiza labels não rotulados com clusters
-        unlabeled_mask = self.labels == -1
-        max_label = self.labels.max() + 1
-        
+        print(f"  • Pontos de ruído (não agrupados): {n_noise}")
+        print(f"  • Clusters prontos para rotulação manual")
+
+        # Atualiza labels com os clusters encontrados
         for cluster_id in set(cluster_labels):
-            if cluster_id != -1:  # Ignora ruído
-                cluster_mask = (cluster_labels == cluster_id) & unlabeled_mask
+            if cluster_id != -1:  # Ignora ruído por enquanto
+                cluster_mask = (cluster_labels == cluster_id)
                 if cluster_mask.sum() > 0:
-                    self.labels[cluster_mask] = max_label + cluster_id
-                    self.confidence_scores[cluster_mask] = 0.7  # Confiança média para clusters
+                    # Usa o cluster_id diretamente como label
+                    self.labels[cluster_mask] = cluster_id
+                    # Confiança inicial é zero, pois ainda não foram rotulados manualmente
+                    self.confidence_scores[cluster_mask] = 0.0
         
         # Calcula métricas de qualidade do clustering
         if n_clusters > 1:
@@ -531,34 +446,32 @@ def main():
     """Função principal para executar o pipeline completo"""
     
     print("="*80)
-    print("🚀 SISTEMA DE ROTULAÇÃO SEMI-SUPERVISIONADA DE DADOS DE SAÚDE")
+    print("🚀 SISTEMA DE ROTULAÇÃO SEMI-SUPERVISIONADA DE DADOS ORÇAMENTÁRIOS")
     print("="*80)
-    
+
     # Inicializa o sistema com vigilância de 0.9
-    labeler = SemiSupervisedHealthDataLabeler(vigilance=0.9)
-    
-    # Pipeline completo
+    labeler = SemiSupervisedBudgetLabeler(vigilance=0.9)
+
+    # Pipeline completo - Primeira etapa: Clustering
     (labeler
         .load_data('siof_saude.xlsx')
         .create_features()
-        .identify_initial_patterns()
         .cluster_dbscan()
-        .semi_supervised_learning(n_iterations=5)
         .analyze_results()
-        .export_results('dados_rotulados.xlsx')
+        .export_results('dados_clusters.xlsx')
     )
-    
+
     print("\n" + "="*80)
-    print("✅ PROCESSO CONCLUÍDO COM SUCESSO!")
+    print("✅ CLUSTERING CONCLUÍDO COM SUCESSO!")
     print("="*80)
-    
+
     # Recomendações finais
     print("\n📋 PRÓXIMOS PASSOS RECOMENDADOS:")
-    print("1. Revise os rótulos atribuídos automaticamente na planilha exportada")
-    print("2. Corrija manualmente rótulos incorretos (especialmente os com baixa confiança)")
-    print("3. Execute novamente o processo com os rótulos corrigidos para melhorar o modelo")
-    print("4. Considere adicionar mais padrões conhecidos para melhorar a rotulação inicial")
-    print("5. Ajuste o parâmetro de vigilância se necessário (atual: 0.9)")
+    print("1. Revise os clusters gerados na planilha 'dados_clusters.xlsx'")
+    print("2. Rotule MANUALMENTE alguns exemplos de cada cluster principal")
+    print("3. Salve os dados rotulados e execute o aprendizado semi-supervisionado")
+    print("4. Use .semi_supervised_learning() para propagar os rótulos manuais")
+    print("5. Ajuste o parâmetro de vigilância se necessário (atual: 0.9 = 90% similaridade)")
     
     return labeler
 
